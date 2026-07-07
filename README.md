@@ -39,6 +39,7 @@ the install. Then edit `robot.port` in `config/robot/*.json` if not on
 | Gamepad teleop | `./config/robot/run_so101_teleop.sh` |
 | Table-frame moves | `./config/robot/run_goto_table.sh --home` |
 | CV detection | `PYTHONPATH=. python -m cv_service -i data/images/M1.jpg` |
+| Pick detected box | `./config/robot/run_cv_pick.sh --image data/images/M1.jpg` |
 | Check homography | `python scripts/check_homography.py` |
 
 Full how-to for every task: **[docs/USAGE.md](docs/USAGE.md)**.

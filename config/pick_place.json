@@ -1,0 +1,14 @@
+{
+  "comment": "Continuous pick-and-place task settings. The drop zone is defined ONCE in CV table coords (metres, homography frame): the arm places boxes at its centre (mapped to the robot frame), and any detection inside it is ignored so a placed box is not re-picked.",
+  "poll_interval_s": 2.0,
+  "drop_zone_cv_m": {
+    "x": [0.55, 0.74],
+    "y": [0.00, 0.20]
+  },
+  "place": {
+    "robot_xy_m": null,
+    "z_m": 0.0,
+    "hover_m": 0.05
+  },
+  "return_home_after_place": true
+}

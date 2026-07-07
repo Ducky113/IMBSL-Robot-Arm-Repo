@@ -19,7 +19,8 @@ All commands are run from the project's `Main/` directory unless noted.
   - [8b. Check the homography](#8b-check-the-homography)
   - [8c. Tune HSV thresholds](#8c-tune-hsv-thresholds)
   - [8d. Detect samples](#8d-detect-samples)
-- [9. Troubleshooting](#9-troubleshooting)
+- [9. Pick a detected box (CV → arm)](#9-pick-a-detected-box-cv--arm)
+- [10. Troubleshooting](#10-troubleshooting)
 
 ---
 
@@ -230,7 +231,110 @@ PYTHONPATH=. python -m cv_service -i data/images/M1.jpg --show
 Detections are filtered to the calibrated table quad and reported as
 `(x_cm, y_cm)` in the table frame.
 
-## 9. Troubleshooting
+## 9. Pick a detected box (CV → arm)
+
+`mission/cv_pick.py` ties the CV service to the arm: it detects the box, maps
+its coordinate into the robot frame, hovers **5 cm above** the point, and then
+optionally descends, closes the gripper, and lifts.
+
+```bash
+# Dry run — detect and print the target poses, no motion
+./config/robot/run_cv_pick.sh --image ../data/images/M1.jpg
+
+# Live camera, move to the hover pose only
+./config/robot/run_cv_pick.sh --camera 0 --go
+
+# Live camera, single full pick (hover → descend → close → lift)
+./config/robot/run_cv_pick.sh --camera 0 --go --pick
+
+# Single pick AND place in the drop zone
+./config/robot/run_cv_pick.sh --camera 0 --go --pick --place
+```
+
+Useful flags (all forwarded to `cv_pick.py`): `--hover` (metres above the point,
+default 0.05), `--pick-z` (table-surface z in the robot frame), `--gripper-open`
+/ `--gripper-closed`, `--duration`, `--no-calibrate`.
+
+### Continuous watch-and-sort loop
+
+`--loop` polls the camera every couple of seconds; whenever it sees a box
+outside the drop zone it picks it and places it in the drop zone, then keeps
+watching:
+
+```bash
+# Watch live camera; pick every new box and place it in the drop zone
+./config/robot/run_cv_pick.sh --camera 0 --loop --go
+
+# Same but test detection/timing first without moving (dry run)
+./config/robot/run_cv_pick.sh --camera 0 --loop
+```
+
+Press Ctrl-C to stop. The poll interval and drop behaviour come from
+`config/pick_place.json`:
+
+```json
+{
+  "poll_interval_s": 2.0,
+  "drop_zone_cv_m": { "x": [0.55, 0.74], "y": [0.00, 0.20] },
+  "place": { "robot_xy_m": null, "z_m": 0.0, "hover_m": 0.05 },
+  "return_home_after_place": true
+}
+```
+
+- `drop_zone_cv_m` — the drop area as a rectangle in **CV table metres** (same
+  frame as the homography). This does two jobs at once:
+  1. **Place target** — boxes are placed at the centre of this rectangle
+     (mapped into the robot frame via `cv_to_robot.json`). Set
+     `place.robot_xy_m` to override with an explicit robot-frame point instead.
+  2. **Detection mask** — any box whose centre falls inside this rectangle is
+     ignored, so a box already in the drop zone is never re-picked.
+- `place.z_m` — table-surface height in the robot frame at the drop point.
+- `poll_interval_s` — seconds between camera checks (default 2).
+- `return_home_after_place` — go back to mid-joint home after each place.
+
+Override the interval on the fly with `--interval SECONDS`.
+
+### The CV → robot calibration (required before moving)
+
+The CV homography frame (origin = bottom-left table corner) and the robot table
+frame (origin = mid-joint home pose) are **different**. `cv_pick.py` converts
+between them with a 2D affine transform in `config/cv_to_robot.json`.
+
+Until you calibrate it, the transform is the identity: dry runs still print, but
+`--go` **refuses to move** (the mapped coordinate would be meaningless).
+
+To calibrate:
+
+1. Place the box at several spots on the table (≥ 3, spread out, not in a line).
+2. For each spot, note the CV coordinate (run the dry-run above) **and** the
+   matching robot coordinate — jog the gripper to that exact point and read it:
+
+   ```bash
+   ./config/robot/run_goto_table.sh --interactive   # or --where after jogging
+   ```
+
+3. Put the pairs in a JSON file (metres), e.g. `points.json`:
+
+   ```json
+   [
+     {"cv": [0.10, 0.10], "robot": [0.05, -0.12]},
+     {"cv": [0.60, 0.10], "robot": [0.30,  0.20]},
+     {"cv": [0.35, 0.45], "robot": [-0.10, 0.05]}
+   ]
+   ```
+
+4. Solve and save the transform:
+
+   ```bash
+   python mission/cv_pick.py --calibrate points.json --out config/cv_to_robot.json
+   ```
+
+   It prints the RMS residual and sets `"calibrated": true`. After that, `--go`
+   is allowed. Also set `pick_z_m` in `config/cv_to_robot.json` to the table
+   surface height in the robot frame, and confirm `gripper_open` / `gripper_closed`
+   match your arm (verify with the gripper test in step 7).
+
+## 10. Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|

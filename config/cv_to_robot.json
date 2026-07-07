@@ -1,0 +1,12 @@
+{
+  "comment": "2D affine map from CV table coords (metres, homography frame) to robot table coords (metres, mid-joint-home frame). robot_xy = A @ [x_cv, y_cv, 1]. Until calibrated this is identity, which is almost certainly wrong for your setup -- run `python mission/cv_pick.py --calibrate points.json` to solve it from measured correspondences.",
+  "A": [
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0]
+  ],
+  "pick_z_m": 0.0,
+  "hover_m": 0.05,
+  "gripper_open": 100.0,
+  "gripper_closed": 0.0,
+  "calibrated": false
+}
