@@ -1,0 +1,28 @@
+{
+  "robot": {
+    "port": "/dev/ttyACM0",
+    "id": "so101_follower",
+    "use_degrees": true,
+    "max_relative_target": 10.0
+  },
+  "kinematics": {
+    "urdf_path": "assets/SO-ARM100/Simulation/SO101/so101_new_calib.urdf",
+    "target_frame_name": "gripper_frame_link"
+  },
+  "table_frame": {
+    "origin": "mid_joint_home",
+    "home_on_connect": true,
+    "comment": "(0,0,0) is the end-effector at mid-range joints (0 deg per joint after calibration); x/y/z are offsets in robot-base axes"
+  },
+  "workspace_m": {
+    "x": [-0.5, 1],
+    "y": [-0.5, 1],
+    "z": [-0.4, 0.4]
+  },
+  "motion": {
+    "duration_s": 2.0,
+    "fps": 30
+  },
+  "default_hover_z_m": 0.2,
+  "default_gripper": 50.0
+}

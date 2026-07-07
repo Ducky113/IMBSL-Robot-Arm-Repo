@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Data & outputs (regenerable or local)
+data/datasets/*
+!data/datasets/.gitkeep
+output/
+logs/
+models/
+
+# IDE
+.cursor/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# LeRobot local calibration (per-robot; copy manually if sharing)
+**/calibration/*.json

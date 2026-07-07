@@ -1,0 +1,349 @@
+diff --git a/src/lerobot/policies/groot/groot_n1.py b/src/lerobot/policies/groot/groot_n1.py
+index c9110301..79de4518 100644
+--- a/src/lerobot/policies/groot/groot_n1.py
++++ b/src/lerobot/policies/groot/groot_n1.py
+@@ -26,14 +26,9 @@ from lerobot.utils.import_utils import _transformers_available
+ 
+ # Conditional import for type checking and lazy loading
+ if TYPE_CHECKING or _transformers_available:
+-    from huggingface_hub.dataclasses import strict
+     from transformers import AutoConfig, AutoModel, PretrainedConfig, PreTrainedModel
+     from transformers.feature_extraction_utils import BatchFeature
+ else:
+-
+-    def strict(cls):
+-        return cls
+-
+     AutoConfig = None
+     AutoModel = None
+     PretrainedConfig = object
+@@ -178,7 +173,6 @@ N_COLOR_CHANNELS = 3
+ 
+ 
+ # config
+-@strict
+ class GR00TN15Config(PretrainedConfig):
+     model_type = "gr00t_n1_5"
+ 
+diff --git a/src/lerobot/processor/delta_action_processor.py b/src/lerobot/processor/delta_action_processor.py
+index 86b2feec..cdf5492f 100644
+--- a/src/lerobot/processor/delta_action_processor.py
++++ b/src/lerobot/processor/delta_action_processor.py
+@@ -46,14 +46,24 @@ class MapTensorToDeltaActionDictStep(ActionProcessorStep):
+         if action.dim() > 1:
+             action = action.squeeze(0)
+ 
+-        # TODO (maractingi): add rotation
+         delta_action = {
+             "delta_x": action[0].item(),
+             "delta_y": action[1].item(),
+             "delta_z": action[2].item(),
+         }
+-        if self.use_gripper:
+-            delta_action["gripper"] = action[3].item()
++        if action.numel() >= 5 and self.use_gripper:
++            delta_action["delta_wz"] = action[3].item()
++            delta_action["gripper"] = action[4].item()
++        elif action.numel() >= 4:
++            if self.use_gripper:
++                delta_action["gripper"] = action[3].item()
++                delta_action["delta_wz"] = 0.0
++            else:
++                delta_action["delta_wz"] = action[3].item()
++        else:
++            delta_action["delta_wz"] = 0.0
++            if self.use_gripper:
++                delta_action["gripper"] = 1.0
+         return delta_action
+ 
+     def transform_features(
+@@ -97,23 +107,19 @@ class MapDeltaActionToRobotActionStep(RobotActionProcessorStep):
+         delta_x = action.pop("delta_x")
+         delta_y = action.pop("delta_y")
+         delta_z = action.pop("delta_z")
++        delta_wz = float(action.pop("delta_wz", 0.0))
+         gripper = action.pop("gripper")
+ 
+-        # Determine if the teleoperator is actively providing input
+-        # Consider enabled if any significant movement delta is detected
+-        position_magnitude = (delta_x**2 + delta_y**2 + delta_z**2) ** 0.5  # Use Euclidean norm for position
+-        enabled = position_magnitude > self.noise_threshold  # Small threshold to avoid noise
++        position_magnitude = (delta_x**2 + delta_y**2 + delta_z**2) ** 0.5
++        enabled = position_magnitude > self.noise_threshold or abs(delta_wz) > self.noise_threshold
+ 
+-        # Scale the deltas appropriately
+         scaled_delta_x = delta_x * self.position_scale
+         scaled_delta_y = delta_y * self.position_scale
+         scaled_delta_z = delta_z * self.position_scale
+ 
+-        # For gamepad/keyboard, we don't have rotation input, so set to 0
+-        # These could be extended in the future for more sophisticated teleoperators
+         target_wx = 0.0
+         target_wy = 0.0
+-        target_wz = 0.0
++        target_wz = delta_wz * self.position_scale
+ 
+         # Update action with robot target format
+         action = {
+diff --git a/src/lerobot/processor/hil_processor.py b/src/lerobot/processor/hil_processor.py
+index e7351827..4aa93d8f 100644
+--- a/src/lerobot/processor/hil_processor.py
++++ b/src/lerobot/processor/hil_processor.py
+@@ -494,11 +494,11 @@ class InterventionActionProcessorStep(ProcessorStep):
+         # Override action if intervention is active
+         if is_intervention and teleop_action is not None:
+             if isinstance(teleop_action, dict):
+-                # Convert teleop_action dict to tensor format
+                 action_list = [
+                     teleop_action.get("delta_x", 0.0),
+                     teleop_action.get("delta_y", 0.0),
+                     teleop_action.get("delta_z", 0.0),
++                    teleop_action.get("delta_wz", 0.0),
+                 ]
+                 if self.use_gripper:
+                     action_list.append(teleop_action.get(GRIPPER_KEY, 1.0))
+diff --git a/src/lerobot/rl/gym_manipulator.py b/src/lerobot/rl/gym_manipulator.py
+index 03f7b4ee..08f73d03 100644
+--- a/src/lerobot/rl/gym_manipulator.py
++++ b/src/lerobot/rl/gym_manipulator.py
+@@ -647,8 +647,8 @@ def control_loop(
+         else:
+             action_features = {
+                 "dtype": "float32",
+-                "shape": (4,),
+-                "names": ["delta_x", "delta_y", "delta_z", "gripper"],
++                "shape": (5,),
++                "names": ["delta_x", "delta_y", "delta_z", "delta_wz", "gripper"],
+             }
+         features = {
+             ACTION: action_features,
+@@ -696,7 +696,7 @@ def control_loop(
+             step_start_time = time.perf_counter()
+ 
+             # Create a neutral action (no movement)
+-            neutral_action = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32)
++            neutral_action = torch.tensor([0.0, 0.0, 0.0, 0.0], dtype=torch.float32)
+             if use_gripper:
+                 neutral_action = torch.cat([neutral_action, torch.tensor([1.0])])  # Gripper stay
+ 
+diff --git a/src/lerobot/teleoperators/gamepad/configuration_gamepad.py b/src/lerobot/teleoperators/gamepad/configuration_gamepad.py
+index b3a565c0..6d78d329 100644
+--- a/src/lerobot/teleoperators/gamepad/configuration_gamepad.py
++++ b/src/lerobot/teleoperators/gamepad/configuration_gamepad.py
+@@ -23,3 +23,4 @@ from ..config import TeleoperatorConfig
+ @dataclass
+ class GamepadTeleopConfig(TeleoperatorConfig):
+     use_gripper: bool = True
++    wz_step_size: float = 0.12
+diff --git a/src/lerobot/teleoperators/gamepad/gamepad_utils.py b/src/lerobot/teleoperators/gamepad/gamepad_utils.py
+index c1531ca8..c9fed160 100644
+--- a/src/lerobot/teleoperators/gamepad/gamepad_utils.py
++++ b/src/lerobot/teleoperators/gamepad/gamepad_utils.py
+@@ -62,8 +62,8 @@ class InputController:
+         pass
+ 
+     def get_deltas(self):
+-        """Get the current movement deltas (dx, dy, dz) in meters."""
+-        return 0.0, 0.0, 0.0
++        """Get the current movement deltas (dx, dy, dz, dwz)."""
++        return 0.0, 0.0, 0.0, 0.0
+ 
+     def update(self):
+         """Update controller state - call this once per frame."""
+@@ -205,18 +205,20 @@ class KeyboardController(InputController):
+         if self.key_states["backward_z"]:
+             delta_z -= self.z_step_size
+ 
+-        return delta_x, delta_y, delta_z
++        return delta_x, delta_y, delta_z, 0.0
+ 
+ 
+ class GamepadController(InputController):
+     """Generate motion deltas from gamepad input."""
+ 
+-    def __init__(self, x_step_size=1.0, y_step_size=1.0, z_step_size=1.0, deadzone=0.1):
++    def __init__(self, x_step_size=1.0, y_step_size=1.0, z_step_size=1.0, wz_step_size=0.12, deadzone=0.1):
+         require_package("pygame", extra="gamepad")
+         super().__init__(x_step_size, y_step_size, z_step_size)
++        self.wz_step_size = wz_step_size
+         self.deadzone = deadzone
+         self.joystick = None
+         self.intervention_flag = False
++        self.wrist_roll_mode = False
+ 
+     def start(self):
+         """Initialize pygame and the gamepad."""
+@@ -233,8 +235,9 @@ class GamepadController(InputController):
+         logging.info(f"Initialized gamepad: {self.joystick.get_name()}")
+ 
+         print("Gamepad controls:")
+-        print("  Left analog stick: Move in X-Y plane")
+-        print("  Right analog stick (vertical): Move in Z axis")
++        print("  Hold RB + left stick: Move in X-Y plane")
++        print("  Hold RB + right stick (vertical): Move in Z axis")
++        print("  Hold RB + LB + left stick (horizontal): Wrist roll")
+         print("  B/Circle button: Exit")
+         print("  Y/Triangle button: End episode with SUCCESS")
+         print("  A/Cross button: End episode with FAILURE")
+@@ -280,38 +283,39 @@ class GamepadController(InputController):
+                 elif event.button == 7:
+                     self.open_gripper_command = False
+ 
+-            # Check for RB button (typically button 5) for intervention flag
+-            if self.joystick.get_button(5):
+-                self.intervention_flag = True
+-            else:
+-                self.intervention_flag = False
++            # RB (button 5): intervention; LB (button 4): wrist-roll mode
++            self.intervention_flag = bool(self.joystick.get_button(5))
++            self.wrist_roll_mode = bool(self.joystick.get_button(4))
+ 
+     def get_deltas(self):
+-        """Get the current movement deltas from gamepad state."""
++        """Get movement deltas (dx, dy, dz) and wrist-roll delta (dwz)."""
+         try:
+-            # Read joystick axes
+-            # Left stick X and Y (typically axes 0 and 1)
+-            y_input = self.joystick.get_axis(0)  # Up/Down (often inverted)
+-            x_input = self.joystick.get_axis(1)  # Left/Right
+-
+-            # Right stick Y (typically axis 3 or 4)
+-            z_input = self.joystick.get_axis(3)  # Up/Down for Z
++            # Left stick: axes 0 (Y) and 1 (X); right stick Z: axis 3
++            y_input = self.joystick.get_axis(0)
++            x_input = self.joystick.get_axis(1)
++            z_input = self.joystick.get_axis(3)
+ 
+-            # Apply deadzone to avoid drift
+             x_input = 0 if abs(x_input) < self.deadzone else x_input
+             y_input = 0 if abs(y_input) < self.deadzone else y_input
+             z_input = 0 if abs(z_input) < self.deadzone else z_input
+ 
+-            # Calculate deltas (note: may need to invert axes depending on controller)
+-            delta_x = -x_input * self.x_step_size  # Forward/backward
+-            delta_y = -y_input * self.y_step_size  # Left/right
+-            delta_z = -z_input * self.z_step_size  # Up/down
++            delta_z = -z_input * self.z_step_size
++            delta_wz = 0.0
++
++            if self.wrist_roll_mode:
++                # LB held: left stick horizontal → wrist roll (rotvec z)
++                delta_wz = -x_input * self.wz_step_size
++                delta_x = 0.0
++                delta_y = 0.0
++            else:
++                delta_x = -x_input * self.x_step_size
++                delta_y = -y_input * self.y_step_size
+ 
+-            return delta_x, delta_y, delta_z
++            return delta_x, delta_y, delta_z, delta_wz
+ 
+         except pygame.error:
+             logging.error("Error reading gamepad. Is it still connected?")
+-            return 0.0, 0.0, 0.0
++            return 0.0, 0.0, 0.0, 0.0
+ 
+ 
+ class GamepadControllerHID(InputController):
+@@ -456,8 +460,8 @@ class GamepadControllerHID(InputController):
+     def get_deltas(self):
+         """Get the current movement deltas from gamepad state."""
+         # Calculate deltas - invert as needed based on controller orientation
+-        delta_x = -self.left_x * self.x_step_size  # Forward/backward
+-        delta_y = -self.left_y * self.y_step_size  # Left/right
+-        delta_z = -self.right_y * self.z_step_size  # Up/down
++        delta_x = -self.left_x * self.x_step_size
++        delta_y = -self.left_y * self.y_step_size
++        delta_z = -self.right_y * self.z_step_size
+ 
+-        return delta_x, delta_y, delta_z
++        return delta_x, delta_y, delta_z, 0.0
+diff --git a/src/lerobot/teleoperators/gamepad/teleop_gamepad.py b/src/lerobot/teleoperators/gamepad/teleop_gamepad.py
+index 8c1796e4..57d81fe1 100644
+--- a/src/lerobot/teleoperators/gamepad/teleop_gamepad.py
++++ b/src/lerobot/teleoperators/gamepad/teleop_gamepad.py
+@@ -18,8 +18,6 @@ import sys
+ from enum import IntEnum
+ from typing import Any
+ 
+-import numpy as np
+-
+ from lerobot.types import RobotAction
+ from lerobot.utils.decorators import check_if_not_connected
+ 
+@@ -61,14 +59,20 @@ class GamepadTeleop(Teleoperator):
+         if self.config.use_gripper:
+             return {
+                 "dtype": "float32",
+-                "shape": (4,),
+-                "names": {"delta_x": 0, "delta_y": 1, "delta_z": 2, "gripper": 3},
++                "shape": (5,),
++                "names": {
++                    "delta_x": 0,
++                    "delta_y": 1,
++                    "delta_z": 2,
++                    "delta_wz": 3,
++                    "gripper": 4,
++                },
+             }
+         else:
+             return {
+                 "dtype": "float32",
+-                "shape": (3,),
+-                "names": {"delta_x": 0, "delta_y": 1, "delta_z": 2},
++                "shape": (4,),
++                "names": {"delta_x": 0, "delta_y": 1, "delta_z": 2, "delta_wz": 3},
+             }
+ 
+     @property
+@@ -83,7 +87,7 @@ class GamepadTeleop(Teleoperator):
+         else:
+             from .gamepad_utils import GamepadController as Gamepad
+ 
+-        self.gamepad = Gamepad()
++        self.gamepad = Gamepad(wz_step_size=self.config.wz_step_size)
+         self.gamepad.start()
+ 
+     @check_if_not_connected
+@@ -92,15 +96,13 @@ class GamepadTeleop(Teleoperator):
+         self.gamepad.update()
+ 
+         # Get movement deltas from the controller
+-        delta_x, delta_y, delta_z = self.gamepad.get_deltas()
+-
+-        # Create action from gamepad input
+-        gamepad_action = np.array([delta_x, delta_y, delta_z], dtype=np.float32)
++        delta_x, delta_y, delta_z, delta_wz = self.gamepad.get_deltas()
+ 
+         action_dict = {
+-            "delta_x": gamepad_action[0],
+-            "delta_y": gamepad_action[1],
+-            "delta_z": gamepad_action[2],
++            "delta_x": delta_x,
++            "delta_y": delta_y,
++            "delta_z": delta_z,
++            "delta_wz": delta_wz,
+         }
+ 
+         # Default gripper action is to stay
+diff --git a/src/lerobot/utils/utils.py b/src/lerobot/utils/utils.py
+index 6aad0c50..14966dd7 100644
+--- a/src/lerobot/utils/utils.py
++++ b/src/lerobot/utils/utils.py
+@@ -19,6 +19,7 @@ import logging
+ import os
+ import platform
+ import select
++import shutil
+ import subprocess
+ import sys
+ import time
+@@ -118,6 +119,8 @@ def say(text: str, blocking: bool = False):
+         cmd = ["say", text]
+ 
+     elif system == "Linux":
++        if shutil.which("spd-say") is None:
++            return
+         cmd = ["spd-say", text]
+         if blocking:
+             cmd.append("--wait")
