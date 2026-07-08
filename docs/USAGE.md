@@ -41,7 +41,7 @@ verifies everything imports.
 Manual equivalent:
 
 ```bash
-conda create -n lerobot python=3.11
+conda create -n lerobot python=3.12
 conda activate lerobot
 pip install -e "lerobot[gamepad,kinematics,feetech]"
 pip install 'placo>=0.9.16'
@@ -338,6 +338,7 @@ To calibrate:
 
 | Symptom | Fix |
 |---------|-----|
+| `lerobot requires different python ... not in >=3.12` | Your `lerobot` conda env is too old (e.g. 3.10). Remove it and re-run setup: `conda remove -n lerobot --all`, then `cd Main && ./setup.sh`. Or upgrade in place: `conda install -n lerobot python=3.12`. |
 | `Missing motor IDs: 6` on connect | Gripper not on the bus — check power/cable, or re-assign IDs with `lerobot-setup-motors` (do the gripper last so it gets ID 6). |
 | `placo failed to import` | `pip install 'placo>=0.9.16'`; re-run if `liburdfdom_sensor.so.4.0` is reported missing. |
 | `termios.error` / port busy | Another process (often teleop) holds the port. Stop it: `pkill -f gym_manipulator`, then retry. |

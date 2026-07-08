@@ -13,7 +13,7 @@
 #
 # Environment overrides (optional):
 #   LEROBOT_ENV_NAME       conda env name         (default: lerobot)
-#   LEROBOT_PYTHON_VERSION python version         (default: 3.11)
+#   LEROBOT_PYTHON_VERSION python version         (default: 3.12)
 #   USE_VENV=1             force a venv instead of conda
 
 set -euo pipefail
@@ -21,13 +21,33 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEROBOT_DIR="${ROOT}/lerobot"
 ENV_NAME="${LEROBOT_ENV_NAME:-lerobot}"
-PYTHON_VERSION="${LEROBOT_PYTHON_VERSION:-3.11}"
+PYTHON_VERSION="${LEROBOT_PYTHON_VERSION:-3.12}"
+MIN_PYTHON_MAJOR=3
+MIN_PYTHON_MINOR=12
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33mWARN:\033[0m %s\n' "$*"; }
 die()   { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [[ -d "${LEROBOT_DIR}" ]] || die "lerobot/ not found at ${LEROBOT_DIR}. Run this from the project's Main/ directory."
+
+python_meets_minimum() {
+  python - <<'PY'
+import sys
+major, minor = sys.version_info[:2]
+sys.exit(0 if (major, minor) >= (3, 12) else 1)
+PY
+}
+
+check_python_version() {
+  local ver
+  ver="$(python -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
+  if ! python_meets_minimum; then
+    die "Python ${ver} is too old — vendored LeRobot requires >= 3.12. Remove the old env and rerun setup, e.g.:
+  conda remove -n ${ENV_NAME} --all
+  ./setup.sh"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # 1. Python environment (conda preferred, venv fallback)
@@ -40,16 +60,26 @@ if [[ "${USE_VENV:-0}" != "1" ]] && command -v conda >/dev/null 2>&1; then
     info "Creating conda env '${ENV_NAME}'"
     conda create -y -n "${ENV_NAME}" "python=${PYTHON_VERSION}"
   else
-    info "Conda env '${ENV_NAME}' already exists — reusing it"
+    info "Conda env '${ENV_NAME}' already exists — checking Python version"
+    conda activate "${ENV_NAME}"
+    if ! python_meets_minimum; then
+      warn "Existing env has Python $(python -c 'import sys; print(".".join(map(str, sys.version_info[:3])))') — upgrading to ${PYTHON_VERSION}"
+      conda install -y -n "${ENV_NAME}" "python=${PYTHON_VERSION}"
+    fi
   fi
   conda activate "${ENV_NAME}"
 else
   info "Using a local virtualenv at ${ROOT}/.venv"
-  command -v python3 >/dev/null 2>&1 || die "python3 not found. Install Python ${PYTHON_VERSION}+ or conda."
+  command -v python3 >/dev/null 2>&1 || die "python3 not found. Install Python ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+ or conda."
+  if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
+    die "python3 is too old — vendored LeRobot requires >= 3.12. Install a newer Python or use conda."
+  fi
   [[ -d "${ROOT}/.venv" ]] || python3 -m venv "${ROOT}/.venv"
   # shellcheck disable=SC1091
   source "${ROOT}/.venv/bin/activate"
 fi
+
+check_python_version
 
 # ---------------------------------------------------------------------------
 # 2. Install LeRobot (vendored, editable) + project extras
